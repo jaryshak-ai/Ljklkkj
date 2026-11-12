@@ -1,0 +1,683 @@
+# FunTools - развлекательные и админские команды для Nukkit-MOT.
+# Положи этот файл в репозиторий как .github/workflows/funtools.yml
+# и запусти: Actions -> Build FunTools -> Run workflow. Jar будет в Artifacts.
+name: Build FunTools
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/funtools.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Write plugin sources
+        run: |
+          mkdir -p $(dirname pom.xml)
+          cat > pom.xml <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>funtools</groupId>
+            <artifactId>FunTools</artifactId>
+            <version>1.0.0</version>
+            <properties>
+              <maven.compiler.source>17</maven.compiler.source>
+              <maven.compiler.target>17</maven.compiler.target>
+              <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+            </properties>
+            <repositories>
+              <repository>
+                <id>lanink</id>
+                <url>https://repo.lanink.cn/repository/maven-public/</url>
+              </repository>
+            </repositories>
+            <dependencies>
+              <dependency>
+                <groupId>cn.nukkit</groupId>
+                <artifactId>Nukkit</artifactId>
+                <version>MOT-SNAPSHOT</version>
+                <scope>provided</scope>
+              </dependency>
+            </dependencies>
+            <build>
+              <finalName>FunTools-${project.version}</finalName>
+            </build>
+          </project>
+          EOF
+          mkdir -p $(dirname src/main/resources/plugin.yml)
+          cat > src/main/resources/plugin.yml <<'EOF'
+          name: FunTools
+          main: funtools.FunTools
+          version: "1.0.0"
+          api: ["1.0.0"]
+          author: jaryshak
+          description: Развлекательные и админские команды
+          softdepend: ["TpCoins"]
+
+          permissions:
+            funtools.jump:
+              default: op
+            funtools.timefly:
+              default: op
+            funtools.milk:
+              default: op
+            funtools.heal:
+              default: op
+            funtools.feed:
+              default: op
+            funtools.night:
+              default: op
+            funtools.mol:
+              default: op
+            funtools.size:
+              default: op
+            funtools.suicide:
+              default: op
+            funtools.daily:
+              default: "true"
+            funtools.rename:
+              default: op
+            funtools.near:
+              default: op
+            funtools.ping:
+              default: "true"
+            funtools.v:
+              default: op
+            funtools.fire:
+              default: op
+            funtools.day:
+              default: op
+            funtools.setnight:
+              default: op
+            funtools.friz:
+              default: op
+            funtools.speed:
+              default: op
+            funtools.creep:
+              default: op
+            funtools.kmol:
+              default: op
+            funtools.kill:
+              default: op
+            funtools.vtp:
+              default: op
+            funtools.protect:
+              description: Защита от /fire /friz /kmol /kill /creep (не действует против OP)
+              default: "false"
+            funtools.bypass:
+              description: Без кулдаунов
+              default: "false"
+          EOF
+          mkdir -p $(dirname src/main/resources/config.yml)
+          cat > src/main/resources/config.yml <<'EOF'
+          # FunTools. Время в секундах, если не сказано иное.
+          cooldown:
+            jump: 20
+            timefly: 180
+            milk: 60
+            heal: 300
+            feed: 60
+            mol: 60
+
+          jump:
+            power: 2.0        # 2.0 примерно 20 блоков вверх
+            nofall-seconds: 8 # сколько секунд после прыжка нет урона от падения
+
+          timefly:
+            seconds: 120
+
+          night:
+            seconds: 99999    # ночное зрение
+
+          invisible:
+            seconds: 99999    # /v
+
+          effects:
+            admin-seconds: 9999   # /speed и /friz
+
+          fire:
+            seconds: 5
+
+          creep:
+            despawn-seconds: 30   # через сколько убирать креперов
+
+          near:
+            radius: 150
+
+          daily:
+            reward: 1000
+            hours: 24
+          EOF
+          mkdir -p $(dirname src/main/java/funtools/FunTools.java)
+          cat > src/main/java/funtools/FunTools.java <<'EOF'
+          package funtools;
+
+          import cn.nukkit.AdventureSettings;
+          import cn.nukkit.Player;
+          import cn.nukkit.command.Command;
+          import cn.nukkit.command.CommandSender;
+          import cn.nukkit.entity.Entity;
+          import cn.nukkit.event.EventHandler;
+          import cn.nukkit.event.Listener;
+          import cn.nukkit.event.entity.EntityDamageEvent;
+          import cn.nukkit.event.entity.EntityExplodeEvent;
+          import cn.nukkit.item.Item;
+          import cn.nukkit.level.Position;
+          import cn.nukkit.math.Vector3;
+          import cn.nukkit.plugin.Plugin;
+          import cn.nukkit.plugin.PluginBase;
+          import cn.nukkit.potion.Effect;
+          import cn.nukkit.scheduler.Task;
+          import cn.nukkit.utils.Config;
+
+          import java.io.File;
+          import java.lang.reflect.Method;
+          import java.util.ArrayList;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.Locale;
+          import java.util.Map;
+          import java.util.Random;
+          import java.util.Set;
+
+          public class FunTools extends PluginBase implements Listener {
+
+              interface Handler {
+                  boolean run(CommandSender s, String[] a) throws Exception;
+              }
+
+              private static final int EF_SPEED = 1;
+              private static final int EF_SLOW = 2;
+              private static final int EF_INVIS = 14;
+              private static final int EF_NIGHT = 16;
+
+              private final Map<String, Long> cooldowns = new HashMap<>();
+              private final Map<String, Long> noFall = new HashMap<>();
+              private final Set<Long> creepers = new HashSet<>();
+              private final Random rnd = new Random();
+              private Config daily;
+
+              @Override
+              public void onEnable() {
+                  saveDefaultConfig();
+                  daily = new Config(new File(getDataFolder(), "daily.yml"), Config.YAML);
+                  getServer().getPluginManager().registerEvents(this, this);
+                  registerAll();
+                  getLogger().info("FunTools включён");
+              }
+
+              // ---------- события ----------
+
+              @EventHandler
+              public void onDamage(EntityDamageEvent e) {
+                  if (!(e.getEntity() instanceof Player)) return;
+                  if (e.getCause() != EntityDamageEvent.DamageCause.FALL) return;
+                  Long until = noFall.get(((Player) e.getEntity()).getName().toLowerCase(Locale.ROOT));
+                  if (until != null && until > System.currentTimeMillis()) e.setCancelled(true);
+              }
+
+              @EventHandler
+              public void onExplode(EntityExplodeEvent e) {
+                  // креперы от /creep бьют игроков, но блоки не ломают
+                  if (creepers.remove(e.getEntity().getId())) {
+                      e.setBlockList(new ArrayList<>());
+                  }
+              }
+
+              // ---------- регистрация ----------
+
+              private void reg(final String name, String desc, String usage, final Handler h) {
+                  getServer().getCommandMap().getCommands().remove(name); // заменяем встроенную команду, если есть
+                  Command c = new Command(name, desc, usage) {
+                      @Override
+                      public boolean execute(CommandSender sender, String label, String[] args) {
+                          if (!testPermission(sender)) return false;
+                          try {
+                              return h.run(sender, args);
+                          } catch (Exception ex) {
+                              sender.sendMessage("§cОшибка в команде /" + name + ": " + ex);
+                              getLogger().error("Ошибка в /" + name, ex);
+                              return true;
+                          }
+                      }
+                  };
+                  c.setPermission("funtools." + name);
+                  getServer().getCommandMap().register("funtools", c);
+              }
+
+              private void registerAll() {
+                  // ----- движение -----
+                  reg("jump", "Подбросить вверх", "/jump", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null || cdBlocked(p, "jump")) return true;
+                      double power = getConfig().getDouble("jump.power", 2.0);
+                      protectFall(p, getConfig().getInt("jump.nofall-seconds", 8));
+                      p.setMotion(new Vector3(0, power, 0));
+                      p.sendMessage("§aВзлёт!");
+                      return true;
+                  });
+
+                  reg("timefly", "Полёт на время", "/timefly", (s, a) -> {
+                      final Player p = me(s);
+                      if (p == null || cdBlocked(p, "timefly")) return true;
+                      int sec = getConfig().getInt("timefly.seconds", 120);
+                      setFly(p, true);
+                      p.sendMessage("§aПолёт включён на " + sec + " с.");
+                      if (sec > 5) {
+                          getServer().getScheduler().scheduleDelayedTask(new Task() {
+                              @Override
+                              public void onRun(int tick) {
+                                  if (p.isOnline()) p.sendMessage("§eПолёт закончится через 5 секунд!");
+                              }
+                          }, (sec - 5) * 20);
+                      }
+                      getServer().getScheduler().scheduleDelayedTask(new Task() {
+                          @Override
+                          public void onRun(int tick) {
+                              endFly(p);
+                          }
+                      }, sec * 20);
+                      return true;
+                  });
+
+                  // ----- тело и эффекты -----
+                  reg("milk", "Снять все эффекты", "/milk", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null || cdBlocked(p, "milk")) return true;
+                      p.removeAllEffects();
+                      p.sendMessage("§aВсе эффекты сняты.");
+                      return true;
+                  });
+
+                  reg("heal", "Восстановить здоровье", "/heal", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null || cdBlocked(p, "heal")) return true;
+                      p.setHealth(p.getMaxHealth());
+                      p.sendMessage("§aЗдоровье восстановлено.");
+                      return true;
+                  });
+
+                  reg("feed", "Накормить", "/feed", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null || cdBlocked(p, "feed")) return true;
+                      p.getFoodData().setLevel(20, 20);
+                      p.sendMessage("§aТы сыт.");
+                      return true;
+                  });
+
+                  reg("night", "Ночное зрение (вкл/выкл)", "/night", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      boolean on = toggleEffect(p, EF_NIGHT, 1, getConfig().getInt("night.seconds", 99999));
+                      p.sendMessage(on ? "§aНочное зрение включено." : "§eНочное зрение выключено.");
+                      return true;
+                  });
+
+                  reg("v", "Невидимость (вкл/выкл)", "/v", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      boolean on = toggleEffect(p, EF_INVIS, 1, getConfig().getInt("invisible.seconds", 99999));
+                      p.sendMessage(on ? "§aТы невидим." : "§eТы снова виден.");
+                      return true;
+                  });
+
+                  reg("speed", "Скорость 1-255 (без числа - выключить)", "/speed <1-255>", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      if (a.length == 0) {
+                          p.removeEffect(EF_SPEED);
+                          p.sendMessage("§eСкорость выключена.");
+                          return true;
+                      }
+                      int lvl = num(a[0]);
+                      if (lvl < 1 || lvl > 255) return usage(s, "/speed <1-255>  (/speed без числа - выключить)");
+                      addEffect(p, EF_SPEED, lvl, getConfig().getInt("effects.admin-seconds", 9999));
+                      p.sendMessage("§aСкорость " + lvl + " включена. Выключить: /speed");
+                      return true;
+                  });
+
+                  reg("friz", "Медлительность на игрока (вкл/выкл)", "/friz <ник>", (s, a) -> {
+                      if (a.length < 1) return usage(s, "/friz <ник>");
+                      Player t = target(s, a[0]);
+                      if (t == null || !allowed(s, t)) return true;
+                      boolean on = toggleEffect(t, EF_SLOW, 5, getConfig().getInt("effects.admin-seconds", 9999));
+                      s.sendMessage(on ? "§a" + t.getName() + " заморожен." : "§e" + t.getName() + " разморожен.");
+                      return true;
+                  });
+
+                  reg("size", "Размер игрока 0.1-10 (без числа - сбросить)", "/size <0.1-10>", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      if (a.length == 0) {
+                          p.setScale(1f);
+                          p.sendMessage("§eРазмер сброшен.");
+                          return true;
+                      }
+                      float v;
+                      try {
+                          v = Float.parseFloat(a[0].replace(',', '.'));
+                      } catch (Exception ex) {
+                          return usage(s, "/size <0.1-10>");
+                      }
+                      if (v < 0.1f || v > 10f) return usage(s, "/size <0.1-10>");
+                      p.setScale(v);
+                      p.sendMessage("§aРазмер: " + v);
+                      return true;
+                  });
+
+                  // ----- прикольное -----
+                  reg("mol", "Безопасная молния рядом", "/mol", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null || cdBlocked(p, "mol")) return true;
+                      Vector3 d = p.getDirectionVector();
+                      lightning(new Position(p.x + d.x * 3, p.y, p.z + d.z * 3, p.getLevel()), true);
+                      return true;
+                  });
+
+                  reg("kmol", "Ударить игрока молнией (с уроном)", "/kmol <ник>", (s, a) -> {
+                      if (a.length < 1) return usage(s, "/kmol <ник>");
+                      Player t = target(s, a[0]);
+                      if (t == null || !allowed(s, t)) return true;
+                      lightning(new Position(t.x, t.y, t.z, t.getLevel()), false);
+                      s.sendMessage("§aМолния ударила в " + t.getName() + ".");
+                      return true;
+                  });
+
+                  reg("fire", "Поджечь игрока", "/fire <ник>", (s, a) -> {
+                      if (a.length < 1) return usage(s, "/fire <ник>");
+                      Player t = target(s, a[0]);
+                      if (t == null || !allowed(s, t)) return true;
+                      t.setOnFire(getConfig().getInt("fire.seconds", 5));
+                      s.sendMessage("§a" + t.getName() + " подожжён.");
+                      return true;
+                  });
+
+                  reg("creep", "Заспавнить криперов возле игрока", "/creep <ник> <1-100>", (s, a) -> {
+                      if (a.length < 2) return usage(s, "/creep <ник> <1-100>");
+                      Player t = target(s, a[0]);
+                      if (t == null || !allowed(s, t)) return true;
+                      int n = num(a[1]);
+                      if (n < 1 || n > 100) return usage(s, "/creep <ник> <1-100>");
+                      int life = getConfig().getInt("creep.despawn-seconds", 30);
+                      int spawned = 0;
+                      for (int i = 0; i < n; i++) {
+                          double dx = (rnd.nextDouble() * 2 - 1) * 3;
+                          double dz = (rnd.nextDouble() * 2 - 1) * 3;
+                          final Entity c = Entity.createEntity("Creeper", new Position(t.x + dx, t.y, t.z + dz, t.getLevel()));
+                          if (c == null) continue;
+                          c.spawnToAll();
+                          creepers.add(c.getId());
+                          spawned++;
+                          getServer().getScheduler().scheduleDelayedTask(new Task() {
+                              @Override
+                              public void onRun(int tick) {
+                                  creepers.remove(c.getId());
+                                  if (!c.isClosed()) c.close();
+                              }
+                          }, life * 20);
+                      }
+                      s.sendMessage("§aЗаспавнено криперов: " + spawned + " возле " + t.getName() + ".");
+                      return true;
+                  });
+
+                  reg("kill", "Убить игрока", "/kill <ник>", (s, a) -> {
+                      if (a.length < 1) return usage(s, "/kill <ник>");
+                      Player t = target(s, a[0]);
+                      if (t == null || !allowed(s, t)) return true;
+                      t.kill();
+                      s.sendMessage("§a" + t.getName() + " убит.");
+                      return true;
+                  });
+
+                  reg("suicide", "Умереть", "/suicide", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      p.kill();
+                      return true;
+                  });
+
+                  reg("vtp", "Тихий телепорт к игроку", "/vtp <ник>", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      if (a.length < 1) return usage(s, "/vtp <ник>");
+                      Player t = target(s, a[0]);
+                      if (t == null) return true;
+                      p.teleport(t.getLocation());
+                      p.sendMessage("§aТихий телепорт к " + t.getName() + ".");
+                      return true;
+                  });
+
+                  // ----- мир -----
+                  reg("day", "Поставить день", "/day", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      p.getLevel().setTime(1000);
+                      p.sendMessage("§aДень.");
+                      return true;
+                  });
+
+                  reg("setnight", "Поставить ночь", "/setnight", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      p.getLevel().setTime(13000);
+                      p.sendMessage("§aНочь.");
+                      return true;
+                  });
+
+                  // ----- утилиты -----
+                  reg("rename", "Переименовать предмет в руке", "/rename <название>", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      if (a.length < 1) return usage(s, "/rename <название>  (цвета через &)");
+                      Item it = p.getInventory().getItemInHand();
+                      if (it == null || it.isNull()) {
+                          p.sendMessage("§cВозьми предмет в руку.");
+                          return true;
+                      }
+                      it.setCustomName(String.join(" ", a).replace('&', '§'));
+                      p.getInventory().setItemInHand(it);
+                      p.sendMessage("§aПредмет переименован.");
+                      return true;
+                  });
+
+                  reg("near", "Игроки рядом", "/near", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      int r = getConfig().getInt("near.radius", 150);
+                      StringBuilder sb = new StringBuilder();
+                      for (Player o : getServer().getOnlinePlayers().values()) {
+                          if (o == p || o.getLevel() != p.getLevel()) continue;
+                          double d = p.distance(o);
+                          if (d <= r) {
+                              if (sb.length() > 0) sb.append("§7, ");
+                              sb.append("§f").append(o.getName()).append(" §7(").append((int) d).append(" м)");
+                          }
+                      }
+                      if (sb.length() == 0) p.sendMessage("§eВ радиусе " + r + " блоков никого нет.");
+                      else p.sendMessage("§aРядом (" + r + " м): " + sb);
+                      return true;
+                  });
+
+                  reg("ping", "Твой пинг", "/ping", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      p.sendMessage("§aТвой пинг: " + p.getPing() + " мс");
+                      return true;
+                  });
+
+                  reg("daily", "Ежедневная награда", "/daily", (s, a) -> {
+                      Player p = me(s);
+                      if (p == null) return true;
+                      long reward = getConfig().getInt("daily.reward", 1000);
+                      long cd = getConfig().getInt("daily.hours", 24) * 3600000L;
+                      long now = System.currentTimeMillis();
+
+                      Plugin tp = getServer().getPluginManager().getPlugin("TpCoins");
+                      if (tp == null || !tp.isEnabled()) {
+                          p.sendMessage("§cПлагин монет не найден.");
+                          return true;
+                      }
+                      String key = ecoKey(tp, p.getName());
+                      String dk = key.replace('.', '_');
+                      long last = daily.getLong(dk, 0L);
+                      if (last + cd > now) {
+                          p.sendMessage("§cНаграду можно забрать через " + fmt((last + cd - now) / 1000));
+                          return true;
+                      }
+
+                      Object eco = tp.getClass().getMethod("getEconomy").invoke(tp);
+                      call(eco, "ensureAccount", new Class<?>[]{Player.class}, p);
+                      Object res = call(eco, "deposit", new Class<?>[]{String.class, long.class, String.class}, key, reward, "daily");
+                      if (!"OK".equals(String.valueOf(res))) {
+                          p.sendMessage("§cНаграду выдать не удалось (" + res + "). Возможно, баланс на максимуме.");
+                          return true;
+                      }
+                      daily.set(dk, now);
+                      daily.save();
+                      long bal = ((Number) call(eco, "getBalance", new Class<?>[]{String.class}, key)).longValue();
+                      p.sendMessage("§aТы получил " + reward + " монет! Баланс: " + bal);
+                      return true;
+                  });
+              }
+
+              // ---------- помощники ----------
+
+              private Player me(CommandSender s) {
+                  if (s instanceof Player) return (Player) s;
+                  s.sendMessage("§cЭта команда только для игроков.");
+                  return null;
+              }
+
+              private Player target(CommandSender s, String name) {
+                  Player t = getServer().getPlayer(name);
+                  if (t == null) s.sendMessage("§cИгрок не найден онлайн.");
+                  return t;
+              }
+
+              // OP может использовать команды на ком угодно, остальных защищает право funtools.protect
+              private boolean allowed(CommandSender s, Player t) {
+                  if (s.isOp()) return true;
+                  if (t.hasPermission("funtools.protect")) {
+                      s.sendMessage("§cЭтот игрок под защитой.");
+                      return false;
+                  }
+                  return true;
+              }
+
+              private boolean usage(CommandSender s, String u) {
+                  s.sendMessage("§eИспользование: " + u);
+                  return true;
+              }
+
+              private int num(String s) {
+                  try {
+                      return Integer.parseInt(s.trim());
+                  } catch (Exception e) {
+                      return -1;
+                  }
+              }
+
+              private String fmt(long sec) {
+                  if (sec >= 3600) return (sec / 3600) + " ч " + ((sec % 3600) / 60) + " мин";
+                  if (sec >= 60) return (sec / 60) + " мин " + (sec % 60) + " с";
+                  return sec + " с";
+              }
+
+              private boolean cdBlocked(Player p, String cmd) {
+                  int sec = getConfig().getInt("cooldown." + cmd, 0);
+                  if (sec <= 0 || p.hasPermission("funtools.bypass")) return false;
+                  String k = p.getName().toLowerCase(Locale.ROOT) + ":" + cmd;
+                  long now = System.currentTimeMillis();
+                  Long until = cooldowns.get(k);
+                  if (until != null && until > now) {
+                      p.sendMessage("§cПодожди ещё " + fmt((until - now + 999) / 1000) + " (/" + cmd + ")");
+                      return true;
+                  }
+                  cooldowns.put(k, now + sec * 1000L);
+                  return false;
+              }
+
+              private void protectFall(Player p, int sec) {
+                  noFall.put(p.getName().toLowerCase(Locale.ROOT), System.currentTimeMillis() + sec * 1000L);
+              }
+
+              private void addEffect(Player p, int id, int level, int seconds) {
+                  p.addEffect(Effect.getEffect(id).setAmplifier(level - 1).setDuration(seconds * 20).setVisible(true));
+              }
+
+              private boolean toggleEffect(Player p, int id, int level, int seconds) {
+                  if (p.hasEffect(id)) {
+                      p.removeEffect(id);
+                      return false;
+                  }
+                  addEffect(p, id, level, seconds);
+                  return true;
+              }
+
+              private void setFly(Player p, boolean on) {
+                  AdventureSettings as = p.getAdventureSettings();
+                  as.set(AdventureSettings.Type.ALLOW_FLIGHT, on);
+                  if (!on) as.set(AdventureSettings.Type.FLYING, false);
+                  as.update();
+              }
+
+              private void endFly(Player p) {
+                  if (!p.isOnline()) return;
+                  if (p.isCreative() || p.isSpectator()) return;
+                  setFly(p, false);
+                  protectFall(p, 5);
+                  p.sendMessage("§eПолёт закончился.");
+              }
+
+              private void lightning(Position pos, boolean harmless) {
+                  Entity e = Entity.createEntity("Lightning", pos);
+                  if (e == null) return;
+                  if (harmless) {
+                      try {
+                          e.getClass().getMethod("setEffect", boolean.class).invoke(e, false);
+                      } catch (Throwable ignored) {
+                      }
+                  }
+                  e.spawnToAll();
+              }
+
+              // ---------- связь с TpCoins через рефлексию ----------
+
+              private String ecoKey(Plugin tp, String name) {
+                  try {
+                      Class<?> c = Class.forName("tpcoins.util.Players", true, tp.getClass().getClassLoader());
+                      Method m = c.getMethod("norm", String.class);
+                      m.setAccessible(true);
+                      return String.valueOf(m.invoke(null, name));
+                  } catch (Throwable t) {
+                      return name.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+                  }
+              }
+
+              private Object call(Object target, String method, Class<?>[] types, Object... args) throws Exception {
+                  Method m = target.getClass().getMethod(method, types);
+                  m.setAccessible(true);
+                  return m.invoke(target, args);
+              }
+          }
+          EOF
+
+      - name: Build
+        run: mvn -B clean package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FunTools-jar
+          path: target/FunTools-1.0.0.jar
